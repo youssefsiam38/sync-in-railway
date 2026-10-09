@@ -1,0 +1,48 @@
+# Local test topology. The app connects as root, as upstream does (SET GLOBAL event_scheduler needs SUPER).
+# Mirrors the Railway service graph: sync-in (stock upstream image) + mariadb.
+#   sync_in -> Sync-in server on 127.0.0.1:${SYNC_IN_TEST_PORT} (public on :8080 inside), files on /app/data
+#   mariadb -> MariaDB 11.8, data on /var/lib/mysql, reached over the compose network
+name: sync-in-railway-test
+
+services:
+  sync_in:
+    image: syncin/server:2.5.2@sha256:c6a618f955601722d033057f489380618310eda895f1eb1ea755570bee25fd40
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      INIT_ADMIN: 'true'
+      INIT_ADMIN_LOGIN: ${SYNC_IN_TEST_ADMIN_LOGIN:-admin}
+      INIT_ADMIN_PASSWORD: ${SYNC_IN_TEST_ADMIN_PASSWORD:-local-test-only-admin-password}
+      SYNCIN_SERVER_PUBLICURL: http://127.0.0.1:${SYNC_IN_TEST_PORT:-18080}
+      SYNCIN_MYSQL_URL: mysql://root:${MARIADB_ROOT_PASSWORD:-local-test-only-root-password}@mariadb:3306/sync_in
+      SYNCIN_AUTH_ENCRYPTIONKEY: local-test-only-encryption-key-0123456789abcdef
+      SYNCIN_AUTH_TOKEN_ACCESS_SECRET: local-test-only-access-secret-0123456789abcdef
+      SYNCIN_AUTH_TOKEN_REFRESH_SECRET: local-test-only-refresh-secret-0123456789abcdef
+      TZ: UTC
+    ports:
+      - '127.0.0.1:${SYNC_IN_TEST_PORT:-18080}:8080'
+    volumes:
+      - data:/app/data
+
+  mariadb:
+    image: mariadb:11.8@sha256:6422478cb8e159f080fb1d8ccf65101e26fe51385787fde7d16c3b165a331f15
+    restart: unless-stopped
+    # Same flags as upstream's docker compose: the event scheduler backs the cache, full-text indexing needs the larger buffers.
+    command: ['--event-scheduler=ON', '--innodb_ft_cache_size=16000000', '--max-allowed-packet=1G']
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-local-test-only-root-password}
+      MARIADB_DATABASE: sync_in
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+volumes:
+  data:
+  mariadb_data:
